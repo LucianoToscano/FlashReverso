@@ -1,0 +1,92 @@
+name: Android signed build
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: flashreverso-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Test core
+        run: |
+          mkdir -p "$RUNNER_TEMP/flash-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/flash-tests" app/src/main/java/br/com/flashreverso/Inspector.java tests/InspectorTest.java
+          java -cp "$RUNNER_TEMP/flash-tests" br.com.flashreverso.InspectorTest
+      - name: Build unsigned release
+        run: gradle :app:assembleRelease --no-daemon
+      - name: Align, sign and verify
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then echo "::error::Missing secret: $name"; exit 1; fi
+          done
+          umask 077
+          ks="$(mktemp "$RUNNER_TEMP/flashreverso.XXXXXX.jks")"
+          trap 'rm -f "$ks"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ks"
+          unset KEYSTORE_BASE64
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          mkdir -p dist
+          "$tools/zipalign" -P 16 -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$ks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out dist/FlashReverso.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --verbose --print-certs dist/FlashReverso.apk
+          "$tools/zipalign" -c -P 16 4 dist/FlashReverso.apk
+          (cd dist && sha256sum FlashReverso.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          name: FlashReverso-signed
+          path: |
+            dist/FlashReverso.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FlashReverso-signed
+          path: dist
+      - name: Publish verified test release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          tag="test-build-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT"
+          gh release create "$tag" dist/FlashReverso.apk dist/SHA256SUMS.txt \
+            --target "$COMMIT_SHA" --prerelease --title "FlashReverso - teste $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
+            --notes "APK assinado e verificado pelo CI. Teste em dispositivo ainda não confirmado. Motores externos ainda não integrados."
