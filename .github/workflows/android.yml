@@ -56,8 +56,11 @@ jobs:
           mkdir -p dist
           "$tools/zipalign" -P 16 -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
           "$tools/apksigner" sign --ks "$ks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out dist/FlashReverso.apk "$RUNNER_TEMP/aligned.apk"
-          "$tools/apksigner" verify --verbose --print-certs dist/FlashReverso.apk
+          "$tools/apksigner" verify --verbose --print-certs dist/FlashReverso.apk | tee dist/APK-SIGNATURE.txt
           "$tools/zipalign" -c -P 16 4 dist/FlashReverso.apk
+          unzip -tq dist/FlashReverso.apk
+          "$tools/aapt" dump badging dist/FlashReverso.apk > dist/APK-INFO.txt
+          grep -F "package: name='br.com.flashreverso' versionCode='3' versionName='0.1.2'" dist/APK-INFO.txt
           (cd dist && sha256sum FlashReverso.apk > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -66,6 +69,8 @@ jobs:
           path: |
             dist/FlashReverso.apk
             dist/SHA256SUMS.txt
+            dist/APK-SIGNATURE.txt
+            dist/APK-INFO.txt
           if-no-files-found: error
   release:
     needs: build
@@ -87,6 +92,32 @@ jobs:
           set -euo pipefail
           (cd dist && sha256sum -c SHA256SUMS.txt)
           tag="test-build-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT"
-          gh release create "$tag" dist/FlashReverso.apk dist/SHA256SUMS.txt \
-            --target "$COMMIT_SHA" --prerelease --title "FlashReverso - teste $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
+          gh release create "$tag" dist/FlashReverso.apk dist/SHA256SUMS.txt dist/APK-SIGNATURE.txt dist/APK-INFO.txt \
+            --target "$COMMIT_SHA" --prerelease --title "FlashReverso 0.1.2 - teste $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
             --notes "APK assinado e verificado pelo CI. Teste em dispositivo ainda não confirmado. Motores externos ainda não integrados."
+
+  report:
+    name: Report publication status
+    needs: [build, release]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report signed release result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="Build or publication did not complete"
+          target="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [[ "$BUILD_RESULT" == success && "$RELEASE_RESULT" == success ]]; then
+            state=success
+            description="Signed APK verified and published"
+            target="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/test-build-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT"
+          fi
+          gh api --method POST "repos/$GH_REPO/statuses/$GITHUB_SHA" -f state="$state" -f context="flashreverso/signed-release" -f description="$description" -f target_url="$target"
