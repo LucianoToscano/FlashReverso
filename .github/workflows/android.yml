@@ -39,8 +39,9 @@ jobs:
       - name: Test core
         run: |
           mkdir -p "$RUNNER_TEMP/flash-tests"
-          javac -encoding UTF-8 -d "$RUNNER_TEMP/flash-tests" app/src/main/java/br/com/flashreverso/Inspector.java tests/InspectorTest.java
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/flash-tests" app/src/main/java/br/com/flashreverso/Inspector.java app/src/main/java/br/com/flashreverso/LocalTools.java tests/InspectorTest.java tests/LocalToolsTest.java
           java -cp "$RUNNER_TEMP/flash-tests" br.com.flashreverso.InspectorTest
+          java -cp "$RUNNER_TEMP/flash-tests" br.com.flashreverso.LocalToolsTest
       - name: Build unsigned release
         run: gradle :app:assembleRelease --no-daemon
       - name: Align, sign and verify
@@ -69,7 +70,7 @@ jobs:
           "$tools/zipalign" -c -P 16 4 dist/FlashReverso.apk
           unzip -tq dist/FlashReverso.apk
           "$tools/aapt" dump badging dist/FlashReverso.apk > dist/APK-INFO.txt
-          grep -F "package: name='br.com.flashreverso' versionCode='3' versionName='0.1.2'" dist/APK-INFO.txt
+          grep -F "package: name='br.com.flashreverso' versionCode='4' versionName='0.1.3'" dist/APK-INFO.txt
           (cd dist && sha256sum FlashReverso.apk > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -102,7 +103,7 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS.txt)
           tag="test-build-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT"
           gh release create "$tag" dist/FlashReverso.apk dist/SHA256SUMS.txt dist/APK-SIGNATURE.txt dist/APK-INFO.txt \
-            --target "$COMMIT_SHA" --prerelease --title "FlashReverso 0.1.2 - teste $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
+            --target "$COMMIT_SHA" --prerelease --title "FlashReverso 0.1.3 - teste $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
             --notes "APK assinado e verificado pelo CI. Teste em dispositivo ainda não confirmado. Motores externos ainda não integrados."
 
   report:
