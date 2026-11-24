@@ -1,0 +1,2 @@
+PASS local, código 0.1.1: ELF, DEX, IL2CPP signature, ZIP inventory and SHA-256 report.
+Build Android, teste no dispositivo e assinatura CI: não confirmados.
